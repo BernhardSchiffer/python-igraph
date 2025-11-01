@@ -5287,46 +5287,64 @@ PyObject* igraphmodule_Graph_eigen_adjacency(igraphmodule_GraphObject *self,
  * \return a list containing the edge betweenness for every edge
  * \sa igraph_edge_betweenness_limit
  */
-PyObject *igraphmodule_Graph_edge_betweenness_limit(igraphmodule_GraphObject * self,
+PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject * self,
                                               PyObject * args,
                                               PyObject * kwds)
 {
-  static char *kwlist[] = { "directed", "lower_limit", "upper_limit", "distances", "edge_weights", "sources", "targets", "population_weights", "normalized", NULL };
-  igraph_vector_t res, *weights = 0, *distances = 0, *population_weights = 0;
+  static char *kwlist[] = { "directed", "lower_limit", "upper_limit", "distances", "edge_weights", "sources", "targets", "node_weights", "normalized", NULL };
+  igraph_vector_t res, *weights = 0, *distances = 0, *node_weights = 0;
   PyObject *list, *directed = Py_True, *lower_limit = Py_None, *upper_limit = Py_None, *normalized = Py_False;
   PyObject *weights_o = Py_None;
   PyObject *distances_o = Py_None;
   PyObject *sources_o = Py_None;
   PyObject *targets_o = Py_None;
-  PyObject *population_weights_o = Py_None;
+  PyObject *node_weights_o = Py_None;
+  PyObject *lower_limit_num;
+  PyObject *upper_limit_num;
   igraph_vs_t sources;
   igraph_vs_t targets;
+  igraph_real_t lower_limit_value = 0;
+  igraph_real_t upper_limit_value = -1;
   igraph_error_t retval;
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OOOOOOOOO", kwlist,
-                                   &directed, &lower_limit, &upper_limit, &distances_o, &weights_o, &sources_o, &targets_o, &population_weights_o, &normalized))
+                                   &directed, &lower_limit, &upper_limit, &distances_o, &weights_o, &sources_o, &targets_o, &node_weights_o, &normalized))
     return NULL;
 
-  if (igraphmodule_attrib_to_vector_t(weights_o, self, &weights,
-    ATTRIBUTE_TYPE_EDGE)) return NULL;
+  if (distances_o == Py_None && weights_o == Py_None) {
+    PyErr_SetString(PyExc_ValueError, "at least one of weights or distances attributes must have a value");
+    return NULL;
+  } else if (distances_o == Py_None) {
+    // use weights as distances if not provided seperatly
+    distances_o = weights_o;
+  } else if (weights_o == Py_None) {
+    // use distances as weights if not provided seperatly
+    weights_o = distances_o;
+  }
 
-  if (igraphmodule_attrib_to_vector_t(distances_o, self, &distances,
-    ATTRIBUTE_TYPE_EDGE)) {
-    if (weights) { igraph_vector_destroy(weights); free(weights); }
+  if (igraphmodule_attrib_to_vector_t(weights_o, self, &weights, ATTRIBUTE_TYPE_EDGE)) {
+    PyErr_SetString(PyExc_ValueError, "error while getting edge weights from key");
     return NULL;
   }
 
-  if (igraphmodule_attrib_to_vector_t(population_weights_o, self, &population_weights,
+  if (igraphmodule_attrib_to_vector_t(distances_o, self, &distances, ATTRIBUTE_TYPE_EDGE)) {
+    if (weights) { igraph_vector_destroy(weights); free(weights); }
+    PyErr_SetString(PyExc_ValueError, "error while getting edge distances");
+    return NULL;
+  }
+
+  if (igraphmodule_attrib_to_vector_t(node_weights_o, self, &node_weights,
     ATTRIBUTE_TYPE_VERTEX)) {
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
+    igraphmodule_handle_igraph_error();
     return NULL;
   }
 
   if (igraphmodule_PyObject_to_vs_t(sources_o, &sources, &self->g, NULL, NULL)) {
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
-    if (population_weights) { igraph_vector_destroy(population_weights); free(population_weights); }
+    if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
     igraphmodule_handle_igraph_error();
     return NULL;
   }
@@ -5335,7 +5353,7 @@ PyObject *igraphmodule_Graph_edge_betweenness_limit(igraphmodule_GraphObject * s
     igraph_vs_destroy(&sources);
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
-    if (population_weights) { igraph_vector_destroy(population_weights); free(population_weights); }
+    if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
     igraphmodule_handle_igraph_error();
     return NULL;
   }
@@ -5345,42 +5363,70 @@ PyObject *igraphmodule_Graph_edge_betweenness_limit(igraphmodule_GraphObject * s
     igraph_vs_destroy(&sources);
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
-    if (population_weights) { igraph_vector_destroy(population_weights); free(population_weights); }
+    if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
     igraphmodule_handle_igraph_error();
   }
 
-  if (PyNumber_Check(upper_limit)) {
-    PyObject *upper_limit_num = PyNumber_Float(upper_limit);
-    if (!upper_limit_num) {
-      igraph_vs_destroy(&targets);
-      igraph_vs_destroy(&sources);
-      if (weights) { igraph_vector_destroy(weights); free(weights); }
-      if (distances) { igraph_vector_destroy(distances); free(distances); }
-      if (population_weights) { igraph_vector_destroy(population_weights); free(population_weights); }
-      igraph_vector_destroy(&res); return NULL;
-    }
-
-    retval = igraph_edge_betweenness_subset_limit(
-          &self->g, weights, distances, &res,
-          sources, targets, population_weights, PyFloat_AsDouble(lower_limit), PyFloat_AsDouble(upper_limit_num), igraph_ess_all(IGRAPH_EDGEORDER_ID),
-          PyObject_IsTrue(directed), PyObject_IsTrue(normalized)
-        );
-
-    if (retval) {
+  if (lower_limit != Py_None) {
+    if (PyNumber_Check(lower_limit)) {
+      lower_limit_num = PyNumber_Float(lower_limit);
+      if (!lower_limit_num) {
         igraph_vs_destroy(&targets);
         igraph_vs_destroy(&sources);
         if (weights) { igraph_vector_destroy(weights); free(weights); }
         if (distances) { igraph_vector_destroy(distances); free(distances); }
+        if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
         igraph_vector_destroy(&res);
-        igraphmodule_handle_igraph_error();
         return NULL;
+      } else {
+        lower_limit_value = PyFloat_AsDouble(lower_limit_num);
       }
+    } else {
+      PyErr_SetString(PyExc_ValueError, "lower_limit must be an valid number");
+      return NULL;
     }
+  }
+
+  if (upper_limit != Py_None) {
+    if (PyNumber_Check(upper_limit)) {
+      upper_limit_num = PyNumber_Float(upper_limit);
+      if (!upper_limit_num) {
+        igraph_vs_destroy(&targets);
+        igraph_vs_destroy(&sources);
+        if (weights) { igraph_vector_destroy(weights); free(weights); }
+        if (distances) { igraph_vector_destroy(distances); free(distances); }
+        if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+        Py_DECREF(lower_limit_num);
+        igraph_vector_destroy(&res); 
+        return NULL;
+      } else {
+        upper_limit_value = PyFloat_AsDouble(upper_limit_num);
+      }
+    } else {
+      PyErr_SetString(PyExc_ValueError, "upper_limit must be an valid number");
+      return NULL;
+    }
+  }
+
+  retval = igraph_edge_betweenness_subset_limit(
+      &self->g, weights, distances, &res,
+      sources, targets, node_weights, lower_limit_value, upper_limit_value, igraph_ess_all(IGRAPH_EDGEORDER_ID),
+      PyObject_IsTrue(directed), PyObject_IsTrue(normalized)
+    );
 
   igraph_vs_destroy(&targets);
   igraph_vs_destroy(&sources);
   if (weights) { igraph_vector_destroy(weights); free(weights); }
   if (distances) { igraph_vector_destroy(distances); free(distances); }
+  if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+  Py_DECREF(lower_limit_num);
+  Py_DECREF(upper_limit_num);
+
+  if (retval) {
+    igraph_vector_destroy(&res);
+    igraphmodule_handle_igraph_error();
+    return NULL;
+  }
 
   list = igraphmodule_vector_t_to_PyList(&res, IGRAPHMODULE_TYPE_FLOAT);
   igraph_vector_destroy(&res);
@@ -15981,9 +16027,9 @@ struct PyMethodDef igraphmodule_Graph_methods[] = {
    "  a single vertex was supplied.\n"},
 
   /* interface to igraph_edge_betweenness_subset_limit */
-  {"edge_betweenness_limit", (PyCFunction) igraphmodule_Graph_edge_betweenness_limit,
+  {"edge_betweenness_weighted", (PyCFunction) igraphmodule_Graph_edge_betweenness_weighted,
    METH_VARARGS | METH_KEYWORDS,
-   "edge_betweenness_limit(directed=True, lower_limit=None, upper_limit=None, distances=None, edge_weights=None, sources=None, targets=None, population_weights=None, normalized=False)\n--\n\n"
+   "edge_betweenness_weighted(directed=True, lower_limit=None, upper_limit=None, distances=None, edge_weights=None, sources=None, targets=None, node_weights=None, normalized=False)\n--\n\n"
    "Calculates or estimates the edge betweennesses in a graph.\n\n"
    "Also supports calculating edge betweenness with shortest path length cutoffs or\n"
    "considering shortest paths only from certain source vertices or to certain\n"
@@ -16005,7 +16051,7 @@ struct PyMethodDef igraphmodule_Graph_methods[] = {
    "  shortest paths.\n"
    "@param targets: the set of target vertices to consider when calculating\n"
    "  shortest paths.\n"
-   "@param population_weights: node weights to be used. Can be a sequence or iterable or\n"
+   "@param node_weights: node weights to be used. Can be a sequence or iterable or\n"
    "  even an node attribute name.\n"
    "@param normalized: whether to normalize the results.\n"
    "@return: a list with the (exact or estimated) edge betweennesses of all\n"
