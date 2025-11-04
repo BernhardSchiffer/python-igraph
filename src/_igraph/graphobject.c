@@ -5292,7 +5292,9 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
                                               PyObject * kwds)
 {
   static char *kwlist[] = { "directed", "lower_limit", "upper_limit", "distances", "edge_weights", "sources", "targets", "node_weights", "normalized", NULL };
-  igraph_vector_t res, *weights = 0, *distances = 0, *node_weights = 0;
+  igraph_vector_t res, *weights = 0, *distances = 0;
+  node_weight *node_weights_ptr;
+  igraph_int_t weight_count = 0;
   PyObject *list, *directed = Py_True, *lower_limit = Py_None, *upper_limit = Py_None, *normalized = Py_False;
   PyObject *weights_o = Py_None;
   PyObject *distances_o = Py_None;
@@ -5333,18 +5335,71 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
     return NULL;
   }
 
-  if (igraphmodule_attrib_to_vector_t(node_weights_o, self, &node_weights,
-    ATTRIBUTE_TYPE_VERTEX)) {
-    if (weights) { igraph_vector_destroy(weights); free(weights); }
-    if (distances) { igraph_vector_destroy(distances); free(distances); }
-    igraphmodule_handle_igraph_error();
-    return NULL;
+  if (Py_IS_TYPE(node_weights_o, &PyList_Type)) {
+    weight_count = PyList_Size(node_weights_o);
+    // resize node_weights to be an array of node_weight structs;
+    node_weights_ptr = (node_weight*) malloc(weight_count * sizeof(*node_weights_ptr));
+
+    for (igraph_int_t i = 0; i < weight_count; i++) {
+      PyObject *item = PyList_GetItem(node_weights_o, i);
+
+      PyObject *weight_function_name = PyDict_GetItemString(item, "weight_function");
+      // check which weight function to use from the name
+      if (PyUnicode_IsEqualToUTF8String(weight_function_name, "spacial_normalization")) {
+        node_weights_ptr[i].weight_func = spacial_normalization;
+      } else if (PyUnicode_IsEqualToUTF8String(weight_function_name, "population_distance_decay")) {
+        node_weights_ptr[i].weight_func = population_distance_decay;
+      } else if (PyUnicode_IsEqualToUTF8String(weight_function_name, "weight_multiplication")) {
+        node_weights_ptr[i].weight_func = weight_multiplication;
+      } else {
+        PyErr_SetString(PyExc_ValueError, "unknown weight function name in node_weights");
+        if (weights) { igraph_vector_destroy(weights); free(weights); }
+        if (distances) { igraph_vector_destroy(distances); free(distances); }
+        return NULL;
+      }
+
+      PyObject *combinator_name = PyDict_GetItemString(item, "combinator");
+      // check which combinator to use from the name
+      if (PyUnicode_IsEqualToUTF8String(combinator_name, "add")) {
+        node_weights_ptr[i].combinator = NODE_WEIGHT_COMBINATOR_ADD;
+      } else if (PyUnicode_IsEqualToUTF8String(combinator_name, "multiply")) {
+        node_weights_ptr[i].combinator = NODE_WEIGHT_COMBINATOR_MULTIPLY;
+      } else {
+        PyErr_SetString(PyExc_ValueError, "unknown combinator for combining node weights");
+        if (weights) { igraph_vector_destroy(weights); free(weights); }
+        if (distances) { igraph_vector_destroy(distances); free(distances); }
+        return NULL;
+      }
+      
+      PyObject *source_weight_key = PyDict_GetItemString(item, "source_weights");
+      PyObject *target_weight_key = PyDict_GetItemString(item, "target_weights");
+      igraph_vector_t *source_weights = 0;
+      igraph_vector_t *target_weights = 0;
+      if (PyUnicode_Compare(source_weight_key, target_weight_key)) {
+        igraphmodule_attrib_to_vector_t(source_weight_key, self, &source_weights, ATTRIBUTE_TYPE_VERTEX);
+        node_weights_ptr[i].source_weights = source_weights;
+        node_weights_ptr[i].target_weights = source_weights;
+      } else {
+        igraphmodule_attrib_to_vector_t(source_weight_key, self, &source_weights, ATTRIBUTE_TYPE_VERTEX);
+        node_weights_ptr[i].source_weights = source_weights;
+        igraphmodule_attrib_to_vector_t(target_weight_key, self, &target_weights, ATTRIBUTE_TYPE_VERTEX);
+        node_weights_ptr[i].target_weights = target_weights;
+      }
+      igraph_real_t source_weight_sum = 0;
+      igraph_real_t target_weight_sum = 0;
+      for (igraph_int_t j = 0; j < igraph_vcount(&self->g); j++) {
+        source_weight_sum += VECTOR(*(node_weights_ptr[i].source_weights))[j];
+        target_weight_sum += VECTOR(*(node_weights_ptr[i].target_weights))[j];
+      }
+      node_weights_ptr[i].source_weight_sum = source_weight_sum;
+      node_weights_ptr[i].target_weight_sum = target_weight_sum;
+    }
   }
 
   if (igraphmodule_PyObject_to_vs_t(sources_o, &sources, &self->g, NULL, NULL)) {
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
-    if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+    // TODO: free node_weights
     igraphmodule_handle_igraph_error();
     return NULL;
   }
@@ -5353,7 +5408,7 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
     igraph_vs_destroy(&sources);
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
-    if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+    // TODO: free node_weights
     igraphmodule_handle_igraph_error();
     return NULL;
   }
@@ -5363,7 +5418,7 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
     igraph_vs_destroy(&sources);
     if (weights) { igraph_vector_destroy(weights); free(weights); }
     if (distances) { igraph_vector_destroy(distances); free(distances); }
-    if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+    // TODO: free node_weights
     igraphmodule_handle_igraph_error();
   }
 
@@ -5375,7 +5430,7 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
         igraph_vs_destroy(&sources);
         if (weights) { igraph_vector_destroy(weights); free(weights); }
         if (distances) { igraph_vector_destroy(distances); free(distances); }
-        if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+        // TODO: free node_weights
         igraph_vector_destroy(&res);
         return NULL;
       } else {
@@ -5395,7 +5450,7 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
         igraph_vs_destroy(&sources);
         if (weights) { igraph_vector_destroy(weights); free(weights); }
         if (distances) { igraph_vector_destroy(distances); free(distances); }
-        if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+        // TODO: free node_weights
         Py_DECREF(lower_limit_num);
         igraph_vector_destroy(&res); 
         return NULL;
@@ -5408,9 +5463,9 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
     }
   }
 
-  retval = igraph_edge_betweenness_subset_limit(
+  retval = igraph_edge_betweenness_subset_weighted(
       &self->g, weights, distances, &res,
-      sources, targets, node_weights, lower_limit_value, upper_limit_value, igraph_ess_all(IGRAPH_EDGEORDER_ID),
+      sources, targets, node_weights_ptr, weight_count, lower_limit_value, upper_limit_value, igraph_ess_all(IGRAPH_EDGEORDER_ID),
       PyObject_IsTrue(directed), PyObject_IsTrue(normalized)
     );
 
@@ -5418,7 +5473,14 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
   igraph_vs_destroy(&sources);
   if (weights) { igraph_vector_destroy(weights); free(weights); }
   if (distances) { igraph_vector_destroy(distances); free(distances); }
-  if (node_weights) { igraph_vector_destroy(node_weights); free(node_weights); }
+  for (igraph_int_t i = 0; i < weight_count; i++) {
+    if (node_weights_ptr[i].source_weights) {
+      igraph_vector_destroy(node_weights_ptr[i].source_weights);
+    }
+    if (node_weights_ptr[i].target_weights && node_weights_ptr[i].target_weights != node_weights_ptr[i].source_weights) {
+      igraph_vector_destroy(node_weights_ptr[i].target_weights);
+    }
+  }
   Py_DECREF(lower_limit_num);
   Py_DECREF(upper_limit_num);
 
