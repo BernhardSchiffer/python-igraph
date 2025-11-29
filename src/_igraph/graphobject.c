@@ -5347,8 +5347,10 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
       // check which weight function to use from the name
       if (PyUnicode_IsEqualToUTF8String(weight_function_name, "spacial_normalization")) {
         node_weights_ptr[i].weight_func = spacial_normalization;
-      } else if (PyUnicode_IsEqualToUTF8String(weight_function_name, "population_distance_decay")) {
-        node_weights_ptr[i].weight_func = population_distance_decay;
+      } else if (PyUnicode_IsEqualToUTF8String(weight_function_name, "gravity_model")) {
+        node_weights_ptr[i].weight_func = gravity_model;
+      } else if (PyUnicode_IsEqualToUTF8String(weight_function_name, "exponential_gravity_model")) {
+        node_weights_ptr[i].weight_func = exponential_gravity_model;
       } else if (PyUnicode_IsEqualToUTF8String(weight_function_name, "weight_multiplication")) {
         node_weights_ptr[i].weight_func = weight_multiplication;
       } else {
@@ -5393,6 +5395,9 @@ PyObject *igraphmodule_Graph_edge_betweenness_weighted(igraphmodule_GraphObject 
       }
       node_weights_ptr[i].source_weight_sum = source_weight_sum;
       node_weights_ptr[i].target_weight_sum = target_weight_sum;
+
+      PyObject *weight_factor = PyDict_GetItemString(item, "factor");
+      node_weights_ptr[i].factor = PyFloat_AsDouble(weight_factor);
     }
   }
 
